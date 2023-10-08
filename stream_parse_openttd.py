@@ -64,7 +64,7 @@ def stream_parse_openttd(chunks, chunk_size=65536):
                     if has_bit(i, 4):
                         i &= ~0x10;
                         if has_bit(i, 3):
-                            raise Exception()
+                            raise Exception('Bad gamma')
                         i = get_num(1)[0]
                     i = (i << 8) | get_num(1)[0]
                 i = (i << 8) | get_num(1)[0]
@@ -80,7 +80,7 @@ def stream_parse_openttd(chunks, chunk_size=65536):
         6: struct.Struct('>I'),
         7: struct.Struct('>q'),
         8: struct.Struct('>Q'),
-        9: struct.Struct('>I'),
+        9: struct.Struct('>H'),
     }
 
     def parse_simple(get_num, struct_obj, is_list):
@@ -119,6 +119,7 @@ def stream_parse_openttd(chunks, chunk_size=65536):
         chunk_id = get_num(4)
 
         if chunk_id == b'\0\0\0\0':
+            print('DONE')
             return
 
         yield chunk_id
@@ -139,27 +140,70 @@ def stream_parse_openttd(chunks, chunk_size=65536):
 
             def _headers():
                 # Recursive, but don't expect many levels
-                while True:
-                    record_type_raw = get_num(1)[0]
-                    record_type = record_type_raw & 0xf
-                    with_repeat = bool(record_type_raw & 0x10)
-                    if record_type == 0:
-                        break
-                    key_length = read_gamma(get_num)
-                    key = get_num(key_length)
-                    sub_structs = \
-                        tuple(_headers()) if record_type == 11 else \
-                        ()
 
-                    yield key, record_type, with_repeat, sub_structs
+                def _this_level():
+                    while True:
+                        record_type_raw = get_num(1)[0]
+                        record_type = record_type_raw & 0xf
+                        with_repeat = bool(record_type_raw & 0x10)
+                        if record_type == 0:
+                            break
+                        key_length = read_gamma(get_num)
+                        key = get_num(key_length)
+                        yield key, record_type, with_repeat
+
+                for key, record_type, with_repeat in tuple(_this_level()):
+                    sub_headers = \
+                        _headers() if record_type == 11 else \
+                        ()
+                    yield key, record_type, with_repeat, tuple(sub_headers)
+
+            def _records(headers):
+
+                # Non structs first
+                for key, record_type, with_repeat, sub_headers in headers:
+
+                    if record_type == 11:
+                        continue
+                    num_repeats = \
+                        read_gamma(get_num) if with_repeat else \
+                        1
+                    if record_type in SIMPLE_TYPES:
+                        for _ in range(0, num_repeats):
+                            struct_obj = SIMPLE_TYPES[record_type]
+                            value = struct_obj.unpack(get_num(struct_obj.size))[0]
+                    elif record_type == 10:
+                        for _ in range(0, num_repeats):
+                            str_len = read_gamma(get_num)
+                            value = get_num(str_len)
+
+                # Then structs
+                for key, record_type, with_repeat, sub_headers in headers:
+                    if record_type != 11:
+                        continue
+
+                    num_repeats = \
+                        read_gamma(get_num) if with_repeat else \
+                        1
+
+                    for _ in range(0, num_repeats):
+                        _records(sub_headers)
 
             headers = tuple(_headers())
 
+            count = 0
             while True:
                 size = read_gamma(get_num)
                 if size == 0:
                     break
-                get_num(size - 1)
+                # One chunk_id doesn't parse for some reason
+                if chunk_id == b'STNN':
+                    get_num(size - 1)
+                else:
+                    if chunk_type == CH_SPARSE_TABLE:
+                        index = read_gamma(get_num)
+                    _records(headers)
+                count += 1
 
         else:
-            raise Exception('Unsupported')
+            raise Exception('Unsupported chunk')
