@@ -99,9 +99,6 @@ def stream_parse_openttd(chunks, chunk_size=65536):
             for _ in range(0, num_repeats)
         ]
 
-    def parse_struct(get_num, repeats, sub_structs):
-        num_repeats = read_gamma(get_num)
-
     yield_remaining, _, get_num = byte_readers(chunks)
 
     # Initial uncompressed data
@@ -119,7 +116,6 @@ def stream_parse_openttd(chunks, chunk_size=65536):
         chunk_id = get_num(4)
 
         if chunk_id == b'\0\0\0\0':
-            print('DONE')
             return
 
         yield chunk_id
@@ -159,35 +155,23 @@ def stream_parse_openttd(chunks, chunk_size=65536):
                     yield key, record_type, with_repeat, tuple(sub_headers)
 
             def _records(headers):
+                # Recursive, but don't expect many levels
 
-                # Non structs first
                 for key, record_type, with_repeat, sub_headers in headers:
-
-                    if record_type == 11:
-                        continue
                     num_repeats = \
                         read_gamma(get_num) if with_repeat else \
                         1
                     if record_type in SIMPLE_TYPES:
-                        for _ in range(0, num_repeats):
+                        for i in range(0, num_repeats):
                             struct_obj = SIMPLE_TYPES[record_type]
                             value = struct_obj.unpack(get_num(struct_obj.size))[0]
                     elif record_type == 10:
-                        for _ in range(0, num_repeats):
+                        for i in range(0, num_repeats):
                             str_len = read_gamma(get_num)
                             value = get_num(str_len)
-
-                # Then structs
-                for key, record_type, with_repeat, sub_headers in headers:
-                    if record_type != 11:
-                        continue
-
-                    num_repeats = \
-                        read_gamma(get_num) if with_repeat else \
-                        1
-
-                    for _ in range(0, num_repeats):
-                        _records(sub_headers)
+                    elif record_type == 11:
+                        for _ in range(0, num_repeats):
+                            _records(sub_headers)
 
             headers = tuple(_headers())
 
@@ -196,9 +180,6 @@ def stream_parse_openttd(chunks, chunk_size=65536):
                 size = read_gamma(get_num)
                 if size == 0:
                     break
-                # One chunk_id doesn't parse for some reason
-                if chunk_id == b'STNN':
-                    get_num(size - 1)
                 else:
                     if chunk_type == CH_SPARSE_TABLE:
                         index = read_gamma(get_num)
