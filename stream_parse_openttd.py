@@ -116,12 +116,13 @@ def stream_parse_openttd(chunks, chunk_size=65536):
         chunk_id = get_num(4)
 
         if chunk_id == b'\0\0\0\0':
+            print("Done")
             return
-
-        yield chunk_id
 
         chunk_raw_type = get_num(1)[0]
         chunk_type = chunk_raw_type & 0xf
+
+        yield chunk_id, chunk_type
 
         if chunk_type == CH_RIFF:
             length = uint24(get_num(3))
@@ -180,10 +181,16 @@ def stream_parse_openttd(chunks, chunk_size=65536):
                 size = read_gamma(get_num)
                 if size == 0:
                     break
-                else:
-                    if chunk_type == CH_SPARSE_TABLE:
-                        index = read_gamma(get_num)
-                    _records(headers)
+
+                if chunk_id in (b'AIPL', b'GSDT'):
+                    get_num(size)
+                    get_num(1)
+                    continue
+
+                if chunk_type == CH_SPARSE_TABLE:
+                    index = read_gamma(get_num)
+
+                _records(headers)
                 count += 1
 
         else:
